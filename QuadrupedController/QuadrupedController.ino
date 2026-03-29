@@ -32,9 +32,10 @@ unsigned long walkTimer = 0;
 int walkStep = 0;
 
 // Gait tuning: angular offsets applied relative to the saved home pose
-const float HIP_SWING = 15.0;   // degrees hip swings forward/back per step
-const float LIFT_AMOUNT = 20.0; // degrees shoulder lifts up during swing phase
-const float KNEE_BEND = 15.0;   // degrees knee bends during lift phase
+const float HIP_SWING    = 20.0;  // degrees hip swings forward per step
+const float HIP_PUSH     = 10.0;  // degrees each grounded leg pushes back
+const float LIFT_AMOUNT  = 25.0;  // degrees shoulder lifts up during swing phase
+const float KNEE_BEND    = 18.0;  // degrees knee bends during lift phase
 
 // Maps Leg (0-3) and Joint (0-2) to PCA9685 Channel
 // Leg 0: channels 0,1,2
@@ -398,117 +399,135 @@ void updateGait() {
   if (!isWalking)
     return;
 
-  // Delay between gait steps inversely proportional to speed
-  int stepDelay = map(walkSpeed, 1, 10, 800, 100);
+  // Delay between sub-steps; speed 1=slow, 10=fast
+  int stepDelay = map(walkSpeed, 1, 10, 600, 80);
 
   if (millis() - walkTimer >= (unsigned long)stepDelay) {
     walkTimer = millis();
 
-    // Determine direction multipliers
-    // For Forward/Back:  hip swings forward(+) and backward(-)
-    // For Left/Right:    hip offsets simulate turning
-    float hipSwing = HIP_SWING;
-
-    float dirMultiplier = 0;
-    if (walkDir == 'F')
-      dirMultiplier = 1.0;
-    else if (walkDir == 'B')
-      dirMultiplier = -1.0;
-    else if (walkDir == 'L')
-      dirMultiplier = 1.0; // Turn left
-    else if (walkDir == 'R')
-      dirMultiplier = -1.0; // Turn right
-
     bool isTurning = (walkDir == 'L' || walkDir == 'R');
 
-    // 8-step creep gait: move one leg at a time
-    // Each leg cycle: lift → swing forward → plant → push back
+    // For straight walking: dir = +1 forward, -1 backward
+    // For turning: left legs and right legs get opposite hip offsets
+    float dir = 0;
+    if (walkDir == 'F') dir = 1.0;
+    else if (walkDir == 'B') dir = -1.0;
+
+    // Leg groupings:
+    //   Leg 0 = Front-Left,  Leg 1 = Front-Right
+    //   Leg 2 = Back-Left,   Leg 3 = Back-Right
     //
-    // For walking straight: diagonal pairs work in opposition
-    //   Leg order: 0(FL) → 3(BR) → 1(FR) → 2(BL)
+    // Creep gait order (diagonal stability):
+    //   Leg 0 (FL) → Leg 3 (BR) → Leg 1 (FR) → Leg 2 (BL)
     //
-    // For turning: all legs swing in same direction to yaw the body
+    // 12-step cycle:
+    //   Steps 0-2:   Move Leg 0
+    //   Steps 3-5:   Move Leg 3
+    //   Steps 6-8:   Move Leg 1
+    //   Steps 9-11:  Move Leg 2
+
+    // ---- Helper lambdas for this step ----
+    // For turning: left-side legs swing one way, right-side legs the other
+    float swingFL, swingFR, swingBL, swingBR;
+    float pushFL, pushFR, pushBL, pushBR;
+
+    if (isTurning) {
+      float turnDir = (walkDir == 'L') ? 1.0 : -1.0;
+      // Left legs swing one way, right legs the other to yaw the body
+      swingFL = HIP_SWING * turnDir;
+      swingBL = HIP_SWING * turnDir;
+      swingFR = -HIP_SWING * turnDir;
+      swingBR = -HIP_SWING * turnDir;
+      // Push is opposite of swing
+      pushFL = -HIP_PUSH * turnDir;
+      pushBL = -HIP_PUSH * turnDir;
+      pushFR = HIP_PUSH * turnDir;
+      pushBR = HIP_PUSH * turnDir;
+    } else {
+      // Straight walking: all legs swing same direction
+      swingFL = HIP_SWING * dir;
+      swingFR = HIP_SWING * dir;
+      swingBL = HIP_SWING * dir;
+      swingBR = HIP_SWING * dir;
+      pushFL = -HIP_PUSH * dir;
+      pushFR = -HIP_PUSH * dir;
+      pushBL = -HIP_PUSH * dir;
+      pushBR = -HIP_PUSH * dir;
+    }
 
     switch (walkStep) {
+
+    // ===== LEG 0 (Front-Left) =====
     case 0:
-      // --- LIFT Leg 0 (FL) and swing it forward ---
-      if (isTurning) {
-        setLegRelative(0, hipSwing * dirMultiplier, -LIFT_AMOUNT, KNEE_BEND);
-      } else {
-        setLegRelative(0, hipSwing * dirMultiplier, -LIFT_AMOUNT, KNEE_BEND);
-      }
+      // Lift + Swing forward
+      setLegRelative(0, swingFL, -LIFT_AMOUNT, KNEE_BEND);
       break;
-
     case 1:
-      // --- PLANT Leg 0 down in new position ---
-      if (isTurning) {
-        setLegRelative(0, hipSwing * dirMultiplier, 0, 0);
-      } else {
-        setLegRelative(0, hipSwing * dirMultiplier, 0, 0);
-      }
+      // Plant down in the new forward position
+      setLegRelative(0, swingFL, 0, 0);
       break;
-
     case 2:
-      // --- LIFT Leg 3 (BR) and swing it forward ---
-      if (isTurning) {
-        setLegRelative(3, hipSwing * dirMultiplier, -LIFT_AMOUNT, KNEE_BEND);
-      } else {
-        setLegRelative(3, hipSwing * dirMultiplier, -LIFT_AMOUNT, KNEE_BEND);
-      }
+      // Body push: all 4 grounded legs shift backward to propel body forward
+      setLegRelative(0, 0, 0, 0);  // Leg 0 returns to home (was forward, now center)
+      setLegRelative(1, pushFR, 0, 0);
+      setLegRelative(2, pushBL, 0, 0);
+      setLegRelative(3, pushBR, 0, 0);
       break;
 
+    // ===== LEG 3 (Back-Right) =====
     case 3:
-      // --- PLANT Leg 3 ---
-      if (isTurning) {
-        setLegRelative(3, hipSwing * dirMultiplier, 0, 0);
-      } else {
-        setLegRelative(3, hipSwing * dirMultiplier, 0, 0);
-      }
+      // Lift + Swing forward
+      setLegRelative(3, swingBR, -LIFT_AMOUNT, KNEE_BEND);
       break;
-
     case 4:
-      // --- LIFT Leg 1 (FR) and swing it forward ---
-      if (isTurning) {
-        setLegRelative(1, hipSwing * dirMultiplier, -LIFT_AMOUNT, KNEE_BEND);
-      } else {
-        setLegRelative(1, hipSwing * dirMultiplier, -LIFT_AMOUNT, KNEE_BEND);
-      }
+      // Plant
+      setLegRelative(3, swingBR, 0, 0);
       break;
-
     case 5:
-      // --- PLANT Leg 1 ---
-      if (isTurning) {
-        setLegRelative(1, hipSwing * dirMultiplier, 0, 0);
-      } else {
-        setLegRelative(1, hipSwing * dirMultiplier, 0, 0);
-      }
+      // Body push
+      setLegRelative(3, 0, 0, 0);
+      setLegRelative(0, pushFL, 0, 0);
+      setLegRelative(1, pushFR, 0, 0);
+      setLegRelative(2, pushBL, 0, 0);
       break;
 
+    // ===== LEG 1 (Front-Right) =====
     case 6:
-      // --- LIFT Leg 2 (BL) and swing it forward ---
-      if (isTurning) {
-        setLegRelative(2, hipSwing * dirMultiplier, -LIFT_AMOUNT, KNEE_BEND);
-      } else {
-        setLegRelative(2, hipSwing * dirMultiplier, -LIFT_AMOUNT, KNEE_BEND);
-      }
+      // Lift + Swing forward
+      setLegRelative(1, swingFR, -LIFT_AMOUNT, KNEE_BEND);
+      break;
+    case 7:
+      // Plant
+      setLegRelative(1, swingFR, 0, 0);
+      break;
+    case 8:
+      // Body push
+      setLegRelative(1, 0, 0, 0);
+      setLegRelative(0, pushFL, 0, 0);
+      setLegRelative(2, pushBL, 0, 0);
+      setLegRelative(3, pushBR, 0, 0);
       break;
 
-    case 7:
-      // --- PLANT Leg 2 and push body: shift all planted legs backward ---
-      if (isTurning) {
-        setLegRelative(2, hipSwing * dirMultiplier, 0, 0);
-      } else {
-        setLegRelative(2, hipSwing * dirMultiplier, 0, 0);
-        // Push phase: shift the 3 grounded legs backward to propel body forward
-        setLegRelative(0, -hipSwing * dirMultiplier * 0.5, 0, 0);
-        setLegRelative(3, -hipSwing * dirMultiplier * 0.5, 0, 0);
-        setLegRelative(1, -hipSwing * dirMultiplier * 0.5, 0, 0);
-      }
+    // ===== LEG 2 (Back-Left) =====
+    case 9:
+      // Lift + Swing forward
+      setLegRelative(2, swingBL, -LIFT_AMOUNT, KNEE_BEND);
+      break;
+    case 10:
+      // Plant
+      setLegRelative(2, swingBL, 0, 0);
+      break;
+    case 11:
+      // Body push — all legs return toward home
+      setLegRelative(0, pushFL, 0, 0);
+      setLegRelative(1, pushFR, 0, 0);
+      setLegRelative(2, 0, 0, 0);
+      setLegRelative(3, pushBR, 0, 0);
       break;
     }
 
     walkStep++;
-    if (walkStep > 7)
+    if (walkStep > 11)
       walkStep = 0;
   }
 }
