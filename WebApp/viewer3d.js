@@ -1,197 +1,311 @@
 class RobotViewer {
     constructor(containerId) {
         this.container = document.getElementById(containerId);
+        
+        // Create a specific div for Plotly to render into, inserted behind overlays
+        this.plotDiv = document.createElement('div');
+        this.plotDiv.style.width = '100%';
+        this.plotDiv.style.height = '100%';
+        this.plotDiv.style.position = 'absolute';
+        this.plotDiv.style.top = '0';
+        this.plotDiv.style.left = '0';
+        this.plotDiv.style.zIndex = '0';
+        this.container.insertBefore(this.plotDiv, this.container.firstChild);
 
-        // Scene setup
-        this.scene = new THREE.Scene();
-        this.scene.fog = new THREE.FogExp2(0x0a0a0f, 0.002);
+        // State to hold the latest FK positions of each leg (4 arrays of 4 points)
+        this.legJoints = [ [], [], [], [] ];
+        
+        // Colors matching the webapp's Neon Cyan theme
+        this.colors = {
+            bodyMesh: '#00f0ff',       // Cyan body fill
+            bodyOutline: '#00c3cf',    // Slightly darker cyan outline
+            headMarker: '#ffffff',     // White head marker
+            cogMarker: '#2ea043',      // Success green from theme
+            legLines: '#00f0ff',       // Cyan legs
+            legJoints: '#ffffff',      // White leg joints
+            supportPolygon: '#00f0ff', // Cyan translucent support
+            gridLines: 'rgba(0, 240, 255, 0.3)', // Faint cyan grid
+            ground: 'rgba(20, 20, 28, 0.8)',     // Dark glass panel background
+            axisX: '#ff3366',          // Theme danger red
+            axisY: '#2ea043',          // Theme success green
+            axisZ: '#00f0ff'           // Theme accent cyan
+        };
 
-        // Camera setup
-        this.camera = new THREE.PerspectiveCamera(45, this.container.clientWidth / this.container.clientHeight, 0.1, 1000);
-        this.camera.position.set(250, 150, 250);
-
-        // Renderer setup
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-        this.renderer.setClearColor(0x0a0a0f, 0); // Transparent background to show CSS
-        this.container.appendChild(this.renderer.domElement);
-
-        // Controls
-        this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
-        this.controls.enableDamping = true;
-        this.controls.dampingFactor = 0.05;
-        this.controls.maxPolarAngle = Math.PI / 2 - 0.01; // Don't go below ground
-
-        // Robot parts references
-        this.legs = []; // Array of 4 legs, each containing { coxaPivot, femurPivot, tibiaPivot }
-
-        this.setupLighting();
-        this.buildRobot();
+        this.initPlot();
 
         // Handle resizing
-        window.addEventListener('resize', this.onWindowResize.bind(this), false);
-
-        // Start loop
-        this.animate = this.animate.bind(this);
-        requestAnimationFrame(this.animate);
+        window.addEventListener('resize', () => {
+            Plotly.Plots.resize(this.plotDiv);
+        });
     }
 
-    setupLighting() {
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-        this.scene.add(ambientLight);
+    initPlot() {
+        const bl = Kinematics.DIM.BODY_L / 2;
+        const bw = Kinematics.DIM.BODY_W / 2;
 
-        const dirLight = new THREE.DirectionalLight(0x00f0ff, 0.8);
-        dirLight.position.set(100, 200, 100);
-        this.scene.add(dirLight);
+        // Body Mesh & Outline vertices (FL, FR, BR, BL, FL)
+        const mountX = [bl, bl, -bl, -bl, bl];
+        const mountY = [bw, -bw, -bw, bw, bw];
+        const mountZ = [0, 0, 0, 0, 0];
 
-        const backLight = new THREE.PointLight(0xff3366, 0.6, 500);
-        backLight.position.set(-100, 50, -100);
-        this.scene.add(backLight);
+        // Head marker
+        const headX = [bl];
+        const headY = [0];
+        const headZ = [0];
 
-        // Floor grid
-        const gridHelper = new THREE.GridHelper(600, 30, 0x00f0ff, 0x222222);
-        gridHelper.position.y = -120; // Represents the ground
-        gridHelper.material.opacity = 0.3;
-        gridHelper.material.transparent = true;
-        this.scene.add(gridHelper);
-    }
+        // Pre-compute legs at neutral position (90, 90, 90)
+        for (let i = 0; i < 4; i++) {
+            this.legJoints[i] = Kinematics.solveFK(i, 90, 90, 90);
+        }
 
-    buildRobot() {
-        // Materials
-        const bodyMat = new THREE.MeshPhongMaterial({ color: 0x222222, specular: 0x555555, shininess: 30 });
-        const jointMat = new THREE.MeshPhongMaterial({ color: 0x00f0ff });
-        const boneMat = new THREE.MeshPhongMaterial({ color: 0xdddddd });
+        // Ordered for support polygon perimeter: FL(0), FR(1), BR(3), BL(2)
+        const polyOrder = [0, 1, 3, 2];
+        const polyX = polyOrder.map(i => this.legJoints[i][3].x);
+        const polyY = polyOrder.map(i => this.legJoints[i][3].y);
+        const polyZ = polyOrder.map(i => this.legJoints[i][3].z);
 
-        // Body Dimensions
-        const BODY_W = 120; // Width X
-        const BODY_L = 180; // Length Z
-        const BODY_H = 40;  // Height Y
-
-        // Main Body Box
-        const bodyGeo = new THREE.BoxGeometry(BODY_W, BODY_H, BODY_L);
-        this.robotBody = new THREE.Mesh(bodyGeo, bodyMat);
-        this.scene.add(this.robotBody);
-
-        // Define leg mounting positions (Front/Back, Left/Right)
-        // Leg 1: FL, Leg 2: FR, Leg 3: BL, Leg 4: BR
-        const mountOffsets = [
-            { x: BODY_W / 2, z: BODY_L / 2, angle: Math.PI / 4 },     // FL (Leg 1)
-            { x: -BODY_W / 2, z: BODY_L / 2, angle: 3 * Math.PI / 4 },  // FR (Leg 2)
-            { x: BODY_W / 2, z: -BODY_L / 2, angle: -Math.PI / 4 },   // BL (Leg 3)
-            { x: -BODY_W / 2, z: -BODY_L / 2, angle: -3 * Math.PI / 4 } // BR (Leg 4)
+        const traces = [
+            // [0] Body Mesh Translucent
+            {
+                name: 'bodyMesh',
+                type: 'mesh3d',
+                opacity: 0.3,
+                color: this.colors.bodyMesh,
+                x: mountX.slice(0, 4), 
+                y: mountY.slice(0, 4), 
+                z: mountZ.slice(0, 4),
+                i: [0, 0],
+                j: [1, 2],
+                k: [2, 3],
+                hoverinfo: 'none'
+            },
+            // [1] Body Outline Wireframe
+            {
+                name: 'bodyOutline',
+                type: 'scatter3d',
+                mode: 'lines',
+                line: { color: this.colors.bodyOutline, width: 12 },
+                x: mountX, 
+                y: mountY, 
+                z: mountZ,
+                hoverinfo: 'none'
+            },
+            // [2] Head Marker
+            {
+                name: 'headMarker',
+                type: 'scatter3d',
+                mode: 'markers',
+                marker: { color: this.colors.headMarker, size: 14, symbol: 'circle' },
+                x: headX, 
+                y: headY, 
+                z: headZ,
+                hoverinfo: 'none'
+            },
+            // [3] COG Marker
+            {
+                name: 'cogMarker',
+                type: 'scatter3d',
+                mode: 'markers',
+                marker: { color: this.colors.cogMarker, size: 14, symbol: 'circle' },
+                x: [0], y: [0], z: [0],
+                hoverinfo: 'none'
+            },
+            // [4..7] Legs
+            ...Array.from({length: 4}).map((_, i) => {
+                const legNames = ['Leg 1 (FL)', 'Leg 2 (FR)', 'Leg 3 (BL)', 'Leg 4 (BR)'];
+                const jointNames = ['Hip Mount', 'Shoulder Joint', 'Knee Joint', 'Foot Tip'];
+                return {
+                    name: `leg${i}`,
+                    type: 'scatter3d',
+                    mode: 'lines+markers',
+                    line: { color: this.colors.legLines, width: 10 },
+                    marker: { color: this.colors.legJoints, size: 6, symbol: 'circle' },
+                    x: this.legJoints[i].map(p => p.x),
+                    y: this.legJoints[i].map(p => p.y),
+                    z: this.legJoints[i].map(p => p.z),
+                    text: jointNames.map(j => `${legNames[i]} - ${j}`),
+                    hoverinfo: 'none' // Handled by custom HTML
+                };
+            }),
+            // [8] Support Polygon Mesh
+            {
+                name: 'supportPolygon',
+                type: 'mesh3d',
+                opacity: 0.2, // Matches hexapod-master
+                color: this.colors.supportPolygon,
+                x: polyX,
+                y: polyY,
+                z: polyZ,
+                i: [0, 0],
+                j: [1, 2],
+                k: [2, 3],
+                hoverinfo: 'none'
+            },
+            // [9] X Axis (Forward/Red)
+            {
+                name: 'xAxis',
+                type: 'scatter3d',
+                mode: 'lines',
+                line: { color: this.colors.axisX, width: 3 },
+                x: [0, 150], y: [0, 0], z: [0, 0],
+                hoverinfo: 'none'
+            },
+            // [10] Y Axis (Left/Green)
+            {
+                name: 'yAxis',
+                type: 'scatter3d',
+                mode: 'lines',
+                line: { color: this.colors.axisY, width: 3 },
+                x: [0, 0], y: [0, 150], z: [0, 0],
+                hoverinfo: 'none'
+            },
+            // [11] Z Axis (Up/Blue)
+            {
+                name: 'zAxis',
+                type: 'scatter3d',
+                mode: 'lines',
+                line: { color: this.colors.axisZ, width: 3 },
+                x: [0, 0], y: [0, 0], z: [0, 150],
+                hoverinfo: 'none'
+            }
         ];
 
-        // Create 4 legs
-        for (let i = 0; i < 4; i++) {
-            const mount = mountOffsets[i];
+        const layout = {
+            margin: { l: 0, r: 0, b: 0, t: 0 },
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            scene: {
+                xaxis: { 
+                    showgrid: false, zeroline: true, showticklabels: false, title: '', showbackground: false,
+                    zerolinecolor: this.colors.gridLines, zerolinewidth: 2
+                },
+                yaxis: { 
+                    showgrid: false, zeroline: true, showticklabels: false, title: '', showbackground: false,
+                    zerolinecolor: this.colors.gridLines, zerolinewidth: 2
+                },
+                zaxis: { 
+                    showgrid: false, zeroline: true, showticklabels: false, title: '',
+                    showbackground: true, backgroundcolor: this.colors.ground,
+                    zerolinecolor: this.colors.gridLines, zerolinewidth: 2,
+                    range: [-180, 70]
+                },
+                aspectmode: 'manual',
+                aspectratio: { x: 1, y: 1, z: 0.5 },
+                camera: {
+                    eye: { x: -1.7, y: -1.7, z: 1.0 }
+                }
+            },
+            showlegend: false
+        };
 
-            // Base Mount Assembly
-            const legBase = new THREE.Group();
-            legBase.position.set(mount.x, 0, mount.z);
-            legBase.rotation.y = mount.angle;
-            this.robotBody.add(legBase);
+        const config = {
+            displaylogo: false,
+            responsive: true,
+            displayModeBar: true,
+            modeBarButtonsToRemove: ['lasso2d', 'select2d']
+        };
 
-            // -- Hip (Coxa) --
-            // Pivot rotates around Y axis
-            const coxaPivot = new THREE.Group();
-            legBase.add(coxaPivot);
+        Plotly.newPlot(this.plotDiv, traces, layout, config);
 
-            // Generate visuals for Coxa
-            const coxaGeo = new THREE.BoxGeometry(Kinematics.DIM.L_COXA, 15, 20);
-            const coxaMesh = new THREE.Mesh(coxaGeo, boneMat);
-            coxaMesh.position.set(Kinematics.DIM.L_COXA / 2, 0, 0); // Offset to rotate from end
-            coxaPivot.add(coxaMesh);
-
-            // Joint marker
-            const joint1 = new THREE.Mesh(new THREE.CylinderGeometry(12, 12, 16, 16), jointMat);
-            coxaPivot.add(joint1);
-
-            // -- Shoulder (Femur) --
-            // Pivot rotates around Z axis (lifting leg up/down)
-            const femurPivot = new THREE.Group();
-            femurPivot.position.set(Kinematics.DIM.L_COXA, 0, 0); // At end of Coxa
-            coxaPivot.add(femurPivot);
-
-            const femurGeo = new THREE.BoxGeometry(Kinematics.DIM.L_FEMUR, 12, 16);
-            const femurMesh = new THREE.Mesh(femurGeo, boneMat);
-            femurMesh.position.set(Kinematics.DIM.L_FEMUR / 2, 0, 0);
-            femurPivot.add(femurMesh);
-
-            const joint2 = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 18, 16), jointMat);
-            joint2.rotation.x = Math.PI / 2;
-            femurPivot.add(joint2);
-
-            // -- Knee (Tibia) --
-            // Pivot rotates around Z axis
-            const tibiaPivot = new THREE.Group();
-            tibiaPivot.position.set(Kinematics.DIM.L_FEMUR, 0, 0); // At end of Femur
-            femurPivot.add(tibiaPivot);
-
-            const tibiaGeo = new THREE.BoxGeometry(Kinematics.DIM.L_TIBIA, 10, 12);
-            const tibiaMesh = new THREE.Mesh(tibiaGeo, boneMat);
-            tibiaMesh.position.set(Kinematics.DIM.L_TIBIA / 2, 0, 0);
-            tibiaPivot.add(tibiaMesh);
-
-            const joint3 = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 14, 16), jointMat);
-            joint3.rotation.x = Math.PI / 2;
-            tibiaPivot.add(joint3);
-
-            // Save pivots for animation
-            this.legs.push({
-                coxa: coxaPivot,
-                femur: femurPivot,
-                tibia: tibiaPivot
-            });
-
-            // Set neutral position (90 degrees equivalent based on kinematic model)
-            // The kinematics expects 90 to be neutral. We will map 0-180 inputs to radians.
-        }
+        // Setup Custom HTML Tooltip logic
+        this.setupCustomTooltip();
     }
+
+    setupCustomTooltip() {
+        this.hoverTooltip = document.createElement('div');
+        this.hoverTooltip.className = 'custom-tooltip';
+        this.hoverTooltip.style.opacity = '0';
+        document.body.appendChild(this.hoverTooltip);
+
+        // Keep track of cursor globally for tooltips on 3D objects
+        this.mouseX = 0;
+        this.mouseY = 0;
+        document.addEventListener('mousemove', (e) => {
+            this.mouseX = e.clientX;
+            this.mouseY = e.clientY;
+            
+            // Allow tooltip to stick to the mouse if it's visible
+            if (this.hoverTooltip.style.opacity === '1') {
+                this.hoverTooltip.style.left = (this.mouseX + 15) + 'px';
+                this.hoverTooltip.style.top = (this.mouseY + 15) + 'px';
+            }
+        });
+
+        this.plotDiv.on('plotly_hover', (data) => {
+            if (data.points && data.points.length > 0) {
+                const pt = data.points[0];
+                if (!pt.text) return; // Skip if it's not a joint marker
+
+                // Build the inner HTML identical to the button layout requests
+                this.hoverTooltip.innerHTML = `
+                    <div class="tooltip-title">${pt.text}</div>
+                    <div class="tooltip-data">X: ${pt.x.toFixed(1)}</div>
+                    <div class="tooltip-data">Y: ${pt.y.toFixed(1)}</div>
+                    <div class="tooltip-data">Z: ${pt.z.toFixed(1)}</div>
+                `;
+
+                this.hoverTooltip.style.left = (this.mouseX + 15) + 'px';
+                this.hoverTooltip.style.top = (this.mouseY + 15) + 'px';
+                this.hoverTooltip.style.opacity = '1';
+            }
+        });
+
+        this.plotDiv.on('plotly_unhover', () => {
+             this.hoverTooltip.style.opacity = '0';
+        });
+
+        this.plotDiv.addEventListener('mouseleave', () => {
+             this.hoverTooltip.style.opacity = '0';
+        });
+    }
+
 
     /**
      * Updates the visuals of a specific leg
-     * @param {number} legIndex 0-3
-     * @param {number} hipAngle 0-180
-     * @param {number} shoulderAngle 0-180
-     * @param {number} kneeAngle 0-180
      */
     updateLegJoints(legIndex, hipAngle, shoulderAngle, kneeAngle) {
         if (legIndex < 0 || legIndex > 3) return;
 
-        const leg = this.legs[legIndex];
+        // Fetch physical x, y, z points by using Forward Kinematics
+        const joints = Kinematics.solveFK(legIndex, hipAngle, shoulderAngle, kneeAngle);
+        this.legJoints[legIndex] = joints;
 
-        // Map 0-180 degrees from servo commands to model radians
-        // Assuming 90 is neutral straight out
+        // Separate points into trace arrays
+        const xs = joints.map(p => p.x);
+        const ys = joints.map(p => p.y);
+        const zs = joints.map(p => p.z);
 
-        // Hip (Coxa): Rotate around Y
-        // 90 is straight. <90 moves backward, >90 moves forward
-        leg.coxa.rotation.y = (hipAngle - 90) * (Math.PI / 180);
+        // Update the corresponding leg trace (indexes 4, 5, 6, 7)
+        const traceIndex = 4 + legIndex;
+        Plotly.restyle(this.plotDiv, {
+            x: [xs],
+            y: [ys],
+            z: [zs]
+        }, [traceIndex]);
 
-        // Shoulder (Femur): Rotate around Z
-        // 90 is horizontal. <90 is pointing down, >90 is pointing up (or vice versa)
-        leg.femur.rotation.z = (shoulderAngle - 90) * (Math.PI / 180);
+        // Dynamically update the Support Polygon Mesh (index 8) based on newest 4 leg tips
+        const polyOrder = [0, 1, 3, 2];
+        const polyX = polyOrder.map(i => this.legJoints[i][3].x);
+        const polyY = polyOrder.map(i => this.legJoints[i][3].y);
+        const polyZ = polyOrder.map(i => this.legJoints[i][3].z);
 
-        // Knee (Tibia): Rotate around Z relative to Femur
-        // 90 is straight line extending from femur.
-        // Usually knee bends downwards.
-        leg.tibia.rotation.z = -(kneeAngle - 90) * (Math.PI / 180);
+        Plotly.restyle(this.plotDiv, {
+            x: [polyX],
+            y: [polyY],
+            z: [polyZ]
+        }, [8]);
     }
 
-    onWindowResize() {
-        if (!this.container || !this.camera || !this.renderer) return;
-        this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
-        this.camera.updateProjectionMatrix();
-        this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
-    }
-
-    animate() {
-        requestAnimationFrame(this.animate);
-        this.controls.update();
-        this.renderer.render(this.scene, this.camera);
-    }
-
+    /**
+     * Override camera to initial view
+     */
     resetView() {
-        this.camera.position.set(250, 150, 250);
-        this.controls.target.set(0, 0, 0);
+        Plotly.relayout(this.plotDiv, {
+            'scene.camera': {
+                eye: { x: -1.7, y: -1.7, z: 1.0 },
+                center: { x: 0, y: 0, z: 0 },
+                up: { x: 0, y: 0, z: 1 }
+            }
+        });
     }
 }

@@ -115,8 +115,11 @@ body {
     border-radius: 12px;
     overflow: hidden;
     background: #000;
-    /* For 3D canvas */
-    border: 1px solid var(--panel-border);
+    /* Glowing faded border */
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    box-shadow: 0 0 30px var(--accent-glow),
+        0 0 40px var(--accent-glow) inset,
+        0 4px 30px rgba(0, 0, 0, 0.5);
 }
 
 /* Typography & Layout */
@@ -523,4 +526,45 @@ label {
 
 ::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.4);
+}
+
+/* -------------------------------------------
+ * Custom HTML Hover Tooltip
+ * ------------------------------------------- */
+.custom-tooltip {
+    position: fixed;
+    pointer-events: none;
+    z-index: 10000;
+    
+    /* Box Styling */
+    background: rgba(30, 30, 35, 0.95);
+    border-radius: 8px; /* Rounded corners! */
+    padding: 0.8rem;
+    
+    /* Glowing faded border */
+    border: 1px solid rgba(0, 240, 255, 0.4);
+    box-shadow: 0 0 15px var(--accent-glow), 
+                0 0 15px var(--accent-glow) inset,
+                0 5px 20px rgba(0,0,0,0.6);
+                
+    /* Typography */
+    font-family: var(--font-heading);
+    color: var(--text-main);
+    font-size: 0.85rem;
+    line-height: 1.4;
+    
+    transition: opacity 0.15s ease;
+}
+
+.tooltip-title {
+    font-weight: bold;
+    color: #fff;
+    margin-bottom: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 4px;
+}
+
+.tooltip-data {
+    color: var(--text-main);
+    letter-spacing: 1px;
 }
