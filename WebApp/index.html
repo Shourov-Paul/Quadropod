@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quadruped Control Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Inter:wght@300;400;600&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="dashboard-container">
+        <!-- Header -->
+        <header class="glass-header">
+            <div class="logo">
+                <h1>QUADRUPED <span class="highlight">OS</span></h1>
+            </div>
+            <div class="status-indicator">
+                <span id="connection-status" class="status-dot disconnected"></span>
+                <span id="connection-text">Disconnected</span>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- Left Panel: Connection & Calibration -->
+            <aside class="panel glass-panel left-panel">
+                <section class="control-section">
+                    <h2>CONNECTION</h2>
+                    <button id="btn-connect" class="btn primary-btn">CONNECT ROBOT <span class="arrow">→</span></button>
+                    <button id="btn-disconnect" class="btn secondary-btn hidden">DISCONNECT</button>
+                    <div class="console-wrapper">
+                        <div class="console-header">USB Serial Log</div>
+                        <div class="console-box" id="serial-console">System initialized. Awaiting connection...</div>
+                    </div>
+                </section>
+
+                <div class="divider"></div>
+
+                <section class="control-section">
+                    <h2>CALIBRATION</h2>
+                    <p class="subtitle">Adjust joint offsets to neutral 90°</p>
+                    <div class="form-group row-group">
+                        <div class="input-col">
+                            <label>Select Leg</label>
+                            <select id="calib-leg" class="glass-select">
+                                <option value="1">Leg 1 (FL)</option>
+                                <option value="2">Leg 2 (FR)</option>
+                                <option value="3">Leg 3 (BL)</option>
+                                <option value="4">Leg 4 (BR)</option>
+                            </select>
+                        </div>
+                        <div class="input-col">
+                            <label>Select Joint</label>
+                            <select id="calib-joint" class="glass-select">
+                                <option value="1">Hip (0)</option>
+                                <option value="2">Shoulder (1)</option>
+                                <option value="3">Knee (2)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group range-group">
+                        <div class="range-header">
+                            <label>Offset</label>
+                            <span class="range-value"><span id="calib-valDisplay">0.0</span>°</span>
+                        </div>
+                        <input type="range" id="calib-slider" class="glass-slider" min="-45" max="45" step="0.5"
+                            value="0">
+                    </div>
+                    <button id="btn-save-calib" class="btn action-btn">SAVE TO EEPROM</button>
+                </section>
+            </aside>
+
+            <!-- Center Panel: 3D Viewer -->
+            <main class="panel center-panel" id="viewer-container">
+                <div class="overlay-ui">
+                    <div class="view-controls">
+                        <button class="icon-btn" id="btn-reset-view">↺ Reset View</button>
+                    </div>
+                    <div class="status-overlay" id="viewer-status">
+                        Live Tracking: Active
+                    </div>
+                </div>
+                <!-- 3D Canvas injected here -->
+            </main>
+
+            <!-- Right Panel: Robot Control -->
+            <aside class="panel glass-panel right-panel">
+                <section class="control-section tabbed-section">
+                    <div class="tabs">
+                        <button class="tab-btn active" data-target="mode-manual">Manual</button>
+                        <button class="tab-btn" data-target="mode-ik">XYZ Kinematics</button>
+                        <button class="tab-btn" data-target="mode-gait">Gait Patterns</button>
+                    </div>
+
+                    <!-- Manual Control -->
+                    <div id="mode-manual" class="tab-content active">
+                        <h3>DIRECT SERVO CONTROL</h3>
+                        <div class="form-group">
+                            <label>Target Leg</label>
+                            <select id="manual-leg" class="glass-select">
+                                <option value="1">Leg 1 (Front Left)</option>
+                                <option value="2">Leg 2 (Front Right)</option>
+                                <option value="3">Leg 3 (Back Left)</option>
+                                <option value="4">Leg 4 (Back Right)</option>
+                            </select>
+                        </div>
+                        <div class="form-group range-group mt-3">
+                            <div class="range-header">
+                                <label>Hip Joint</label>
+                                <span class="range-value"><span id="val-hip">90</span>°</span>
+                            </div>
+                            <input type="range" id="slider-hip" class="glass-slider" min="0" max="180" value="90">
+                        </div>
+                        <div class="form-group range-group">
+                            <div class="range-header">
+                                <label>Shoulder Joint</label>
+                                <span class="range-value"><span id="val-shoulder">90</span>°</span>
+                            </div>
+                            <input type="range" id="slider-shoulder" class="glass-slider" min="0" max="180" value="90">
+                        </div>
+                        <div class="form-group range-group">
+                            <div class="range-header">
+                                <label>Knee Joint</label>
+                                <span class="range-value"><span id="val-knee">90</span>°</span>
+                            </div>
+                            <input type="range" id="slider-knee" class="glass-slider" min="0" max="180" value="90">
+                        </div>
+                    </div>
+
+                    <!-- IK XYZ Control -->
+                    <div id="mode-ik" class="tab-content hidden">
+                        <h3>XYZ COORDINATE CONTROL</h3>
+                        <p class="subtitle">Control leg tip position directly</p>
+                        <div class="form-group">
+                            <label>Target Leg</label>
+                            <select id="ik-leg" class="glass-select">
+                                <option value="1">Leg 1</option>
+                                <option value="2">Leg 2</option>
+                                <option value="3">Leg 3</option>
+                                <option value="4">Leg 4</option>
+                            </select>
+                        </div>
+                        <div class="form-group range-group mt-3">
+                            <div class="range-header">
+                                <label>X (Forward/Back)</label>
+                                <span class="range-value"><span id="val-x">50</span>mm</span>
+                            </div>
+                            <input type="range" id="slider-x" class="glass-slider" min="-120" max="120" value="50">
+                        </div>
+                        <div class="form-group range-group">
+                            <div class="range-header">
+                                <label>Y (In/Out)</label>
+                                <span class="range-value"><span id="val-y">70</span>mm</span>
+                            </div>
+                            <input type="range" id="slider-y" class="glass-slider" min="20" max="140" value="70">
+                        </div>
+                        <div class="form-group range-group">
+                            <div class="range-header">
+                                <label>Z (Height)</label>
+                                <span class="range-value"><span id="val-z">-100</span>mm</span>
+                            </div>
+                            <input type="range" id="slider-z" class="glass-slider" min="-160" max="-20" value="-100">
+                        </div>
+                    </div>
+
+                    <!-- Gait / Omnidirectional Control -->
+                    <div id="mode-gait" class="tab-content hidden">
+                        <h3>OMNIDIRECTIONAL CONTROL</h3>
+                        <p class="subtitle">Drive the robot using WASD or buttons</p>
+
+                        <!-- D-Pad Interface -->
+                        <div class="d-pad-container mt-3">
+                            <div class="d-pad">
+                                <button class="d-btn up" id="btn-fwd">W</button>
+                                <button class="d-btn left" id="btn-left">A</button>
+                                <button class="d-btn center" id="btn-stop">◼</button>
+                                <button class="d-btn right" id="btn-right">D</button>
+                                <button class="d-btn down" id="btn-back">S</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group mt-3">
+                            <label>Movement Speed</label>
+                            <input type="range" id="slider-speed" class="glass-slider" min="1" max="10" value="5">
+                        </div>
+
+                        <h3 class="mt-3">POSTURES & MACROS</h3>
+                        <div class="gait-grid mt-3">
+                            <button class="btn secondary-btn" id="btn-stand">Stand Neutral</button>
+                            <button class="btn secondary-btn" id="btn-sit">Sit Down</button>
+                            <button class="btn secondary-btn" id="btn-rest">Rest Position</button>
+                        </div>
+                    </div>
+                </section>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="kinematics.js"></script>
+    <script src="viewer3d.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
