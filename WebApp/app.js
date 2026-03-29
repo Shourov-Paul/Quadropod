@@ -98,6 +98,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // Start reading (non-blocking)
             readLoop();
 
+            // Request current saved state from Arduino
+            sendCommand('REPORT');
+
         } catch (err) {
             logToConsole('Error: ' + err.message, 'err');
         }
@@ -135,7 +138,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (value) {
                         const lines = value.split('\n');
                         lines.forEach(line => {
-                            if (line.trim()) logToConsole(`< ${line.trim()}`, 'rx');
+                            line = line.trim();
+                            if (line) {
+                                logToConsole(`< ${line}`, 'rx');
+
+                                // Parse inbound state reporting
+                                if (line.startsWith('STATE:')) {
+                                    const parts = line.split(':');
+                                    if (parts[1] === 'DONE') {
+                                        // Finished receiving state, sync active leg IK sliders
+                                        syncManualSliders(parseInt(UI.manualLeg.value) - 1);
+                                        // Recalculate IK visuals based on current angles if needed, 
+                                        // or just let them be manually. This ensures the UI is flush with EEPROM.
+                                    } else if (parts.length === 4) {
+                                        const legIdx = parseInt(parts[1]) - 1;
+                                        const jointIdx = parseInt(parts[2]);
+                                        const angle = parseFloat(parts[3]);
+
+                                        if (legIdx >= 0 && legIdx < 4) {
+                                            if (jointIdx === 1) state.angles[legIdx].hip = angle;
+                                            if (jointIdx === 2) state.angles[legIdx].shoulder = angle;
+                                            if (jointIdx === 3) state.angles[legIdx].knee = angle;
+                                            update3DModel(legIdx);
+                                        }
+                                    }
+                                }
+                            }
                         });
                     }
                 }
@@ -290,8 +318,9 @@ document.addEventListener('DOMContentLoaded', () => {
         UI.btnLeft.classList.remove('active');
         UI.btnRight.classList.remove('active');
         sendCommand('STOP');
-        // Return to neutral stand
-        UI.btnStand.click();
+        // Request the ESP32 to report its current state (which is now homeAngles)
+        // so the UI sliders and 3D model re-sync to the saved pose
+        setTimeout(() => sendCommand('REPORT'), 200);
     }
 
     function startWalking(dir, btnElement) {
